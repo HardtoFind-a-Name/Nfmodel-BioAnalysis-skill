@@ -79,19 +79,32 @@ nfmodels-analysis-project/
 
 ## 环境配置
 
-核心环境文件：项目根目录下的 `.env`
+核心环境文件位于项目根目录下的 `.env`：
 
-必须配置：
-- `NFMODELS_NEXTFLOW_BIN`：Nextflow 启动命令或绝对路径
-- `NFMODELS_RSCRIPT_CMD`：Rscript 命令，推荐使用 Conda 环境形式
-- `NFMODELS_PYTHON_CMD`：Python 命令
-
-可选配置：
-- `NFMODELS_TIDEPY_BIN`：TIDE 分析需要
-- `SCRNA_NEXTFLOW_BIN`：scRNA pipeline 专用 Nextflow 覆盖项
-- `SCRNA_RSCRIPT_CMD`：scRNA pipeline 专用 Rscript 覆盖项
+| 变量 | 必需 | 说明 |
+|------|------|------|
+| `NFMODELS_NEXTFLOW_BIN` | ✅ | Nextflow 启动命令或绝对路径 |
+| `NFMODELS_RSCRIPT_CMD` | ✅ | Rscript 命令，推荐使用 Conda 环境形式 |
+| `NFMODELS_PYTHON_CMD` | ✅ | Python 命令 |
+| `NFMODELS_TIDEPY_BIN` | ❌ | TIDE 分析需要 |
+| `SCRNA_NEXTFLOW_BIN` | ❌ | scRNA pipeline 专用 Nextflow 覆盖项 |
+| `SCRNA_RSCRIPT_CMD` | ❌ | scRNA pipeline 专用 Rscript 覆盖项 |
 
 Pipeline 的 `run_pipeline.sh` 会自动从项目根加载 `.env`。
+
+用户通常不需要自己运行环境检查命令。可以直接让 agent 使用本项目的环境检查 skill，例如：
+
+```text
+请检查 NFmodels 分析环境是否可用。
+```
+
+或者：
+
+```text
+请检查这个环境是否能跑转录组和单细胞分析；如果缺少 R 包，请列出需要安装的包。
+```
+
+agent 会调用 `nfmodels-environment-check` skill 检查 `.env`、Nextflow、Python、Rscript、R 包和可选 tidepy，并报告阻塞项、警告和建议。
 
 ## Skill 说明
 
@@ -132,42 +145,120 @@ DEG、候选基因、GO/KEGG/PPI、多模型预后、GSEA、CIBERSORT、TIDE、I
 基于文献的 scRNA 细胞类型注释。读取 pipeline 生成的 marker 表和模板，
 结合 `literature-search-review` skill 进行 PubMed 文献检索，生成可审查的注释文件。
 
-## 使用方式
+## 使用方法
 
-### 1. 从方案文件或需求启动
+推荐的使用方式是：用户用自然语言告诉 agent 要做什么分析、数据在哪里、哪些结果需要审核；agent 根据本项目的 skill 生成分析计划、环境检查结果、pipeline 命令和注释交接文件。用户不需要直接记住所有 CLI 参数。
 
-```bash
-# 生成分析计划
-python3 skills/nfmodels-orchestrator/scripts/route_nfmodels_plan.py \
-  --plan-file /path/to/analysis_plan.docx \
-  --project-id demo_project \
-  --out-dir /path/to/planning/
+### 1. 从方案文件或用户需求开始
+
+如果已有方案文件，可以这样告诉 agent：
+
+```text
+请读取 /path/to/analysis_plan.docx，整理可以执行的分析计划。项目 ID 是 demo_project。先不要运行 pipeline，先给我审查 02.analysis_plan.md。
 ```
 
-### 2. 转录组分析
+如果只有自然语言需求，也可以直接说明：
 
-```bash
-# 生成转录组 pipeline 命令
-python3 skills/transcriptome-analysis-orchestrator/scripts/generate_transcriptome_command.py \
-  --project-id demo_project \
-  --train-id TCGA-LUAD \
-  --analyses main
+```text
+我想对 TCGA-LUAD 做转录组 DEG、候选基因、预后模型和免疫浸润分析，同时对 GSEXXXX 单细胞数据做注释和 CellChat。请先生成分析计划，不要直接运行。
 ```
 
-### 3. 单细胞分析
+agent 会调用 `nfmodels-orchestrator` skill 生成可审查的分析计划，通常包括：
 
-```bash
-# 第一阶段：annotation_prepare
-python3 skills/scrna-analysis-orchestrator/scripts/generate_scrna_command.py \
-  --project-id demo_project \
-  --input-rds /path/to/seurat.rds
+- `01.normalized_request.md`
+- `02.analysis_plan.md`
+- `03.route_manifest.json`
+- `04.review_status.json`
 
-# annotation 完成后，第二阶段：annotation_apply
-python3 skills/scrna-analysis-orchestrator/scripts/generate_scrna_command.py \
-  --project-id demo_project \
-  --input-rds /path/to/seurat.rds \
-  --mapping-file /path/to/08_cluster_celltype_mapping_filled.csv
+用户审核计划后，再让 agent 继续执行环境检查和 adapter 命令生成。
+
+### 2. 转录组分析需要提供什么
+
+转录组 pipeline 需要清洗后的表达和表型数据。推荐准备：
+
+- 训练集 count 矩阵：用于 DEG、risk-based GSEA 等需要 count 的步骤
+- 训练集 FPKM 矩阵：用于建模、免疫浸润、TIDE、部分表达分析等步骤
+- 分组信息：Tumor/Normal 或其他比较分组
+- 生存信息：预后建模必须提供
+- 临床信息：stage/nomogram 等临床模型需要
+- 验证集表达和生存信息：多队列模型验证需要
+- 候选基因表或 gene sets：候选基因筛选需要
+- 外部参考文件：如 STRING、GMT、IPS、CNV、MAF 等，按模块需要提供
+
+可以按默认结构把清洗数据放在 `/data/nas1/${USER}/data_cleaned/` 下，也可以直接告诉 agent 每个文件的具体路径，例如：
+
+```text
+项目 ID 是 demo_project，训练集是 TCGA-LUAD。
+清洗后的 count 矩阵在 /path/to/train_count.csv。
+清洗后的 FPKM 矩阵在 /path/to/train_fpkm.csv。
+生存文件在 /path/to/survival.csv。
+临床文件在 /path/to/clinical.csv。
+验证集包括 GSE11969 和 GSE31210。
+STRING 文件在 /data/nas1/public_JOB062/database/string/00.string_interactions.tsv。
+请生成 DEG、候选基因、GO/KEGG/PPI 和多模型预后分析命令，先不要运行。
 ```
+
+agent 会根据这些信息选择 `transcriptome-analysis-orchestrator` skill，并生成对应 pipeline 命令。
+
+### 3. 单细胞分析怎么启动
+
+如果已有 Seurat RDS 或标准 mainline RDS，可以告诉 agent：
+
+```text
+项目 ID 是 demo_project。
+单细胞输入 RDS 在 /data/nas1/public_JOB062/project/demo_project/results/00_rawdata/demo_seurat.rds。
+请运行到 annotation_prepare，生成细胞类型注释模板后暂停，等待人工注释审核。
+```
+
+如果是 GEO 或 10X/UMI 原始数据，可以告诉 agent cohort ID 或原始文件路径：
+
+```text
+单细胞数据是 GSEXXXX，请从默认 database/scRNA 目录查找原始文件。如果自动识别不出来，我会再提供 raw UMI 或 annotation 文件路径。
+```
+
+第一阶段不需要提供 `mapping_file`。pipeline 会生成 marker 表、mapping template、reference template 和 agent context，然后等待注释审核。
+
+### 4. 主细胞类型注释怎么继续
+
+当 `annotation_prepare` 完成后，可以让 agent 读取输出模板并进行注释辅助：
+
+```text
+请根据 results/03_scrna_annotation_prepare 里的 marker 表、mapping template 和 agent context，辅助填写主细胞类型注释，并生成 evidence、decision log 和 validation report。
+```
+
+审核通过后，继续告诉 agent：
+
+```text
+主细胞类型 mapping 已审核通过，文件是 /path/to/08_cluster_celltype_mapping_filled.csv。
+文献 marker reference 文件是 /path/to/09_literature_marker_reference_filled.csv。
+请继续 annotation_apply，并为 T cells 和 Myeloid cells 做 subset annotation prepare。
+```
+
+agent 会调用 `scrna-analysis-orchestrator` 和 `scrna-celltype-annotator` skill 生成后续命令。
+
+### 5. Subset 注释和下游分析怎么继续
+
+subset annotation prepare 完成后，告诉 agent subset mapping 文件在哪里：
+
+```text
+subset mapping manifest 在 /path/to/subset_mapping_manifest.csv。
+请继续 subset_apply，并打开 pseudotime 和 scMetabolism 分析。
+```
+
+### 6. 路径如何提供
+
+推荐的数据结构只是为了让默认配置更容易工作，不是强制结构。实际运行时，用户可以直接用自然语言告诉 agent 关键路径，例如：
+
+```text
+我的 gene file 在 /path/to/genes.csv。
+我的 risk file 在 /path/to/risk_score.csv。
+我的 target gene file 在 /path/to/target_genes.csv，基因列名是 gene。
+我的主细胞注释 mapping 在 /path/to/08_cluster_celltype_mapping_filled.csv。
+我的 subset mapping manifest 在 /path/to/subset_mapping_manifest.csv。
+请根据这些路径生成命令。
+```
+
+agent 会把这些路径转换成底层 CLI 参数。只有在需要复现或调试时，用户才需要查看具体命令。
 
 ## 适配系统
 
